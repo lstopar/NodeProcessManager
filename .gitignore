@@ -1,2 +1,5 @@
+# Node.js files
+/node_modules
+
 # VI temporary files
 *.swp
