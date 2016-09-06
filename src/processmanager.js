@@ -75,7 +75,7 @@ exports.ProcessManager = class ProcessManager {
             this.procHandlerV[procId][event].push({
                 reqN: reqN,
                 handler: handler,
-                timestamp: new Date().getTime() // TODO clean timedout requests
+                timestamp: new Date().getTime()
             });
         }
     }
