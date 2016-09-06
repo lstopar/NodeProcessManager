@@ -1,0 +1,19 @@
+{
+  "name": "NodeProcessManager",
+  "version": "0.1.0",
+  "description": "FFA Data Collector",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified! Configure in package.json\" && exit 1"
+  },
+  "repository": "https://github.com/lstopar/NodeProcessManager.git",
+  "keywords": [
+    "node.js"
+  ],
+  "author": "Luka Stopar",
+  "license": "BSD",
+  "readmeFilename": "README.md",
+  "dependencies": {
+    "express": "^4.14.0"
+  }
+}
