@@ -2,20 +2,20 @@ var express = require('express');
 var fs = require('fs');
 var fork = require('child_process').fork;
 
-var processmanager = require('./src/processmanager.js');
+var processmanager = require('../');
 
 //=========================================
 // VARIABLES
 //=========================================
 
 var config = (function () {
-    if (process.argv.length < 2) {
-        console.log('Usage: node main.js $CONFIG_FILE');
+    if (process.argv.length < 3) {
+        console.log('Usage: node test.js $CONFIG_FILE');
         process.exit(1);
     }
 
-    var confFile = process.argv[1];
-    var configStr = fs.readFileSync('config.json');
+    var confFile = process.argv[2];
+    var configStr = fs.readFileSync(confFile);
     return JSON.parse(configStr);
 })();
 
@@ -97,11 +97,11 @@ try {
     var processes = [];
     for (var i = 0; i < config.processes; i++) {
         console.log('Starting process ' + i + ' ...');
-        var slave = fork('src/slave.js', ['dummy']);
+        var slave = fork(__dirname + '/slave.js', []);
         processes.push(slave);
     }    
 
-    pm = new processmanager.ProcessManager({ processes: processes });
+    pm = new processmanager.master({ processes: processes });
     server = initServer();
 
     pm.on('message', (childId, msg) => {

@@ -1,4 +1,5 @@
-var processmanager = require('./processmanager.js');
+var processmanager = require('../');
+
 
 try {
     var nRequests = 0;
@@ -8,7 +9,7 @@ try {
         return { requests: nRequests, messages: nMessages };
     }
 
-    var proc = new processmanager.ChildProcess();
+    var proc = new processmanager.slave();
     
     proc.on('request', (req, cb) => {
         nRequests++;

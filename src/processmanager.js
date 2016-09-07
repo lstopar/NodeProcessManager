@@ -2,7 +2,97 @@ var messages = require('./messages.js');
 
 const REQUEST_TIMEOUT = 10000;
 
-exports.ProcessManager = class ProcessManager {
+
+class SlaveProcess {
+    constructor() {
+        this.handlers = {
+            request: function (msg, cb) { cb(undefined, null); },   // XXX: when no handler is present send an empty response
+            message: function (msg) {}
+        };
+
+        var self = this;
+        process.on('message', (msg) => {
+            self._onMessage(msg);
+        });
+    }
+
+    /**
+     * Sends a message to the master.
+     *
+     * @param {Object} msg - the message
+     */
+    sendMsg(msg) {
+       this._sendMsg(messages.genMessage(msg));
+    }
+
+    /**
+     * Registers a new event handler.
+     *
+     * @param {String} event - name of the event, either 'message' or 'request'
+     * @param {Function} handler - the event handler. When registering a message handler the function takes one argument: the message,
+     * while when registering a request handler the function takes two arguments: the request and the callback
+     */
+    on(event, handler) {
+        if (event != 'request' && event != 'message')
+            throw new Error('Unknown event: ' + event);
+        this.handlers[event] = handler;
+    }
+
+    _sendMsg(msg) {
+        console.log('Sending message: ' + JSON.stringify(msg));
+        process.send(msg);
+    }
+
+    _onMessage(msg) {
+        try {
+            console.log('Received message in child: ' + JSON.stringify(msg) + ' ...');
+
+            var type = msg.type;
+            switch (type) {
+                case 'ping': {
+                    var pong = messages.genPong();
+                    process.send(pong);
+                    break;
+                }
+                case 'request': {
+                    var handler = this.handlers.request;
+
+                    try {
+                        var self = this;
+                        handler(msg.content, (e, res) => {
+                            if (e != null) {
+                                console.error(e, 'Exception in child process!');
+                                self._sendMsg(messages.genErrorResponse(msg, e.message));
+                                return;
+                            }
+
+                            self._sendMsg(messages.genResponse(msg, res));
+                        });
+                    } catch (e) {
+                        console.error(e, 'Exception while processing request!');
+                        self._sendMsg(messages.genErrorResponse(msg, e.message));
+                    }
+                    break;
+                }
+                case 'message': {
+                    var handler = this.handlers.message;
+                    handler(msg.content);
+                    break;
+                }
+                default: {
+                    // XXX: if not supported throw an exception for now.
+                    throw new Error('Invalid message type: ' + type);
+                }
+            }
+
+        } catch (e) {
+            console.log(e, 'Exception while processing message from parent!');
+        }
+
+    }
+}
+
+class MasterProcess {
     
     constructor(opts) {
         if (opts.processes == null)
@@ -219,92 +309,10 @@ exports.ProcessManager = class ProcessManager {
     }
 }
 
-exports.ChildProcess = class ChildProcess {
-    constructor() {
-        this.handlers = {
-            request: function (msg, cb) { cb(undefined, null); },   // XXX: when no handler is present send an empty response
-            message: function (msg) {}
-        };
+exports.slave = function (opts) {
+    return new SlaveProcess(opts);
+}
 
-        var self = this;
-        process.on('message', (msg) => {
-            self._onMessage(msg);
-        });
-    }
-
-    /*
-     * Sends a message to the master.
-     *
-     * @param {Object} msg - the message
-     */
-    sendMsg(msg) {
-       this._sendMsg(messages.genMessage(msg));
-    }
-
-    /*
-     * Registers a new event handler.
-     *
-     * @param {String} event - name of the event, either 'message' or 'request'
-     * @param {Function} handler - the event handler. When registering a message handler the function takes one argument: the message,
-     * while when registering a request handler the function takes two arguments: the request and the callback
-     */
-    on(event, handler) {
-        if (event != 'request' && event != 'message')
-            throw new Error('Unknown event: ' + event);
-        this.handlers[event] = handler;
-    }
-
-    _sendMsg(msg) {
-        console.log('Sending message: ' + JSON.stringify(msg));
-        process.send(msg);
-    }
-
-    _onMessage(msg) {
-        try {
-            console.log('Received message in child: ' + JSON.stringify(msg) + ' ...');
-
-            var type = msg.type;
-            switch (type) {
-                case 'ping': {
-                    var pong = messages.genPong();
-                    process.send(pong);
-                    break;
-                }
-                case 'request': {
-                    var handler = this.handlers.request;
-
-                    try {
-                        var self = this;
-                        handler(msg.content, (e, res) => {
-                            if (e != null) {
-                                console.error(e, 'Exception in child process!');
-                                self._sendMsg(messages.genErrorResponse(msg, e.message));
-                                return;
-                            }
-
-                            self._sendMsg(messages.genResponse(msg, res));
-                        });
-                    } catch (e) {
-                        console.error(e, 'Exception while processing request!');
-                        self._sendMsg(messages.genErrorResponse(msg, e.message));
-                    }
-                    break;
-                }
-                case 'message': {
-                    var handler = this.handlers.message;
-                    handler(msg.content);
-                    break;
-                }
-                default: {
-                    // XXX: if not supported throw an exception for now.
-                    throw new Error('Invalid message type: ' + type);
-                }
-            }
-
-        } catch (e) {
-            console.log(e, 'Exception while processing message from parent!');
-        }
-
-    }
-
+exports.master = function (opts) {
+    return new MasterProcess(opts);
 }

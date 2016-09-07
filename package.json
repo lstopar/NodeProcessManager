@@ -1,8 +1,8 @@
 {
-  "name": "NodeProcessManager",
+  "name": "process-manager",
   "version": "0.1.0",
-  "description": "FFA Data Collector",
-  "main": "main.js",
+  "description": "Master-slave protocol implementation for child processes.",
+  "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified! Configure in package.json\" && exit 1"
   },
