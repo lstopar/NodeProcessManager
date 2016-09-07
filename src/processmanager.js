@@ -1,7 +1,15 @@
+var bunyan = require('bunyan');
+var bformat = require('bunyan-format');
+
 var messages = require('./messages.js');
 
 const REQUEST_TIMEOUT = 10000;
 
+var log = bunyan.createLogger({
+    name: 'node-pm',
+    level: 'debug',
+    stream: bformat({ outputMode: 'short' })
+});
 
 class SlaveProcess {
     constructor() {
@@ -39,13 +47,15 @@ class SlaveProcess {
     }
 
     _sendMsg(msg) {
-        console.log('Sending message: ' + JSON.stringify(msg));
+        if (log.debug())
+            log.debug('Sending message: %s ...', JSON.stringify(msg));
         process.send(msg);
     }
 
     _onMessage(msg) {
         try {
-            console.log('Received message in child: ' + JSON.stringify(msg) + ' ...');
+            if (log.debug())
+                log.debug('Received message in slave: %s ...', JSON.stringify(msg));
 
             var type = msg.type;
             switch (type) {
@@ -61,7 +71,7 @@ class SlaveProcess {
                         var self = this;
                         handler(msg.content, (e, res) => {
                             if (e != null) {
-                                console.error(e, 'Exception in child process!');
+                                log.error(e, 'Exception in slave process!');
                                 self._sendMsg(messages.genErrorResponse(msg, e.message));
                                 return;
                             }
@@ -69,7 +79,7 @@ class SlaveProcess {
                             self._sendMsg(messages.genResponse(msg, res));
                         });
                     } catch (e) {
-                        console.error(e, 'Exception while processing request!');
+                        log.error(e, 'Exception while processing request!');
                         self._sendMsg(messages.genErrorResponse(msg, e.message));
                     }
                     break;
@@ -86,9 +96,8 @@ class SlaveProcess {
             }
 
         } catch (e) {
-            console.log(e, 'Exception while processing message from parent!');
+            log.error(e, 'Exception while processing message from parent!');
         }
-
     }
 }
 
@@ -104,7 +113,7 @@ class MasterProcess {
     }
 
     /**
-     * Registers a new child process or a new array of child processes and returns their IDs.
+     * Registers a new slave process or a new array of slave processes and returns their IDs.
      * 
      * @param {child_process.ChildProcess|Array<child_process.ChildProcess>} slave(s) - one or more slave processes
      * @param {} [slaveId(s)] - ID (or array of IDs) of the slave
@@ -150,24 +159,29 @@ class MasterProcess {
         try {
             var reqId = this._genReqId(slaveId);
 
+            if (log.debug())
+                log.debug('Sending request to slave: \'%s\', reqId: %d ...', slaveId, reqId);
+
             var req = messages.genRequest(content, reqId);
             var handler = function (e, res) {
                 try {
                     if (e != null)
                         return cb(e);
 
-                    console.log('Received response from process: ' + slaveId);
+                    if (log.debug())
+                        log.debug('Received response from process: \'%s\': \'%s\'!', slaveId, JSON.stringify(res));
 
                     self._offResponse(slaveId, reqId, handler);
                     cb(undefined, res);
                 } catch (e) {
-                    console.error(e, 'Exception while processing response!');
+                    log.error(e, 'Exception while processing response!');
                 }
             }
 
             this._onResponse(slaveId, reqId, handler);
             this._sendMsg(req, slaveId);
         } catch (e) {
+            log.error(e, 'Exception while sending request!');
             cb(e);
         }
     }
@@ -175,6 +189,9 @@ class MasterProcess {
     on(event, handler) {
         if (handler == null)
             throw new Error('Handler is null!');
+
+        if (log.info())
+            log.info('Adding \'%s\' handler ...', event);
 
         if (event == 'message') {
             this.messageCb = handler;
@@ -193,8 +210,9 @@ class MasterProcess {
     off(event, handler) {
         if (handler == null)
             throw new Error('Handler is null!');
-
-        console.log('Removing handler ...');
+        
+        if (log.info())
+            log.info('Removing \'%s\' handler ...', event);
 
         if (event == 'message') {
             this.messageCb = function () {}
@@ -219,13 +237,17 @@ class MasterProcess {
     _sendMsg(msg, slaveId) {
         if (slaveId != null) {
             if (!(slaveId in this.slaveH))
-                throw new Error('Invalid process ID: ' + slaveId);
-            
-            console.log('Sending message to slave ' + slaveId + ' ...');
+                throw new Error('Invalid process ID: %s', slaveId);
+           
+            if (log.debug())
+                log.debug('Sending message to slave: \'%s\' ...', slaveId);
+
             this.slaveH[slaveId].send(msg);            
         }
         else {
-            console.log('Sending message to all slaves ...');
+            if (log.debug())
+                log.debug('Sending message to all slaves ...');
+            
             for (var id in this.slaveH) {
                 this._sendMsg(msg, id);
             }
@@ -233,6 +255,9 @@ class MasterProcess {
     }
 
     _onResponse(slaveId, reqId, handler) {
+        if (log.trace())
+            log.trace('Adding response handler for slave: %s, req: %d ...', slaveId, reqId);
+
         var procHandlers = this.procReqCbH[slaveId];
         procHandlers[reqId] = {
             handler: handler,
@@ -241,11 +266,17 @@ class MasterProcess {
     }
 
     _offResponse(slaveId, reqId, handler) {
+        if (log.trace())
+            log.trace('Removing response handler for slave: \'%s\', req: %d ...', slaveId, reqId);
+
         var procHandlers = this.procReqCbH[slaveId];
         delete procHandlers[reqId];
     }
 
     _initSlave(slave, slaveId) {
+        if (log.info())
+            log.info('Initializing slave: %s ...', slaveId);
+
         if (slaveId == null) slaveId = slave.pid;
 
         this.slaveH[slaveId] = slave;
@@ -255,18 +286,23 @@ class MasterProcess {
         var self = this;
 
         slave.on('error', (e) => {
+            log.error(e, 'Error when initializing slave!');
+
             self._cleanup(slaveId);
             self.errorCb(slaveId, e);
         });
 
         slave.on('close', (code) => {
+            log.info('Slave closed with code: %s', code);
+
             self._cleanup(slaveId);
             self.closeCb(slaveId);
         });
 
         slave.on('message', (msg) => {
             try {
-                console.log('Received message from slave ' + slaveId + ': ' + JSON.stringify(msg) + '...');
+                if (log.debug())
+                    log.debug('Received message from slave %s: %s ...', slaveId, JSON.stringify(msg));
 
                 var type = msg.type;
 
@@ -300,7 +336,7 @@ class MasterProcess {
 
                 self._cleanupRespHandlers();
             } catch (e) {
-                console.log(e, 'Exception while processing slave message!');
+                log.error(e, 'Exception while processing slave message!');
             }
         });
 
@@ -308,6 +344,9 @@ class MasterProcess {
     }
 
     _cleanup(slaveId) {
+        if (log.debug())
+            log.debug('Cleaning up after slave: %s', slaveId);
+
         var slave = this.slaveH[slaveId];
 
         delete this.slaveH[slaveId];
@@ -317,15 +356,17 @@ class MasterProcess {
 
     _cleanupRespHandlers() {
         var timestamp = new Date().getTime();
-        
-        console.log('Cleaning up request handlers ...');
+       
+        if (log.trace())
+            log.trace('Cleaning up request handlers ...');
 
         for (var slaveId in this.procReqCbH) {
             var procHandlers = this.procReqCbH[slaveId];
             for (var reqId in procHandlers) {
                 var handlerConf = procHandlers[reqId];
                 if (timestamp - handlerConf.timestamp > REQUEST_TIMEOUT) {
-                    console.log('Removing handler ' + handlerN + ' of process: ' + procId);
+                    if (log.info())
+                        log.info('Removing handler for request %s of slave: %s ...', reqId, slaveId);
 
                     handlerConf.handler(new Error('Request timeout!'));
                     delete procHandlers[reqId];
