@@ -33,7 +33,7 @@ function handleBadInput(res, msg) {
 }
 
 function handleServerError(e, req, res) {
-    log.error(e, 'Exception while processing request!');
+    console.error(e, 'Exception while processing request!');
     res.status(500);    // internal server error
     res.send(e.message);
     res.end();
@@ -44,7 +44,7 @@ function initServer() {
 
     var app = express();
     
-    app.get('/slaves/touch', function (req, res) {
+    app.get('/slaves/request', function (req, res) {
         try {
             var slaveN = req.query.n;
 
@@ -60,6 +60,18 @@ function initServer() {
                 res.send(childRes);
                 res.end();
             });
+        } catch (e) {
+            console.error(e, 'Exception while processing touch request!');
+        }
+    });
+
+    app.get('/slaves/message', function (req, res) {
+        try {
+            var slaveN = req.query.n;
+
+            pm.sendMsg({}, slaveN);
+            res.status(204) ;
+            res.end();
         } catch (e) {
             console.error(e, 'Exception while processing touch request!');
         }
@@ -91,6 +103,10 @@ try {
 
     pm = new processmanager.ProcessManager({ processes: processes });
     server = initServer();
+
+    pm.on('message', (childId, msg) => {
+        console.log('Received a message from slave ' + childId + ': ' + JSON.stringify(msg));
+    });
 
     console.log('Initialized!');
 } catch (e) {

@@ -4,19 +4,21 @@ try {
     var nRequests = 0;
     var nMessages = 0;
 
-//    setInterval(() => {
-//        updates++;
-//    }, (1000 + Math.random()*10000).toFixed());
-
+    function genMsg() {
+        return { requests: nRequests, messages: nMessages };
+    }
 
     var proc = new processmanager.ChildProcess();
     
     proc.on('request', (req, cb) => {
-        cb(undefined, { requests: ++nRequests });
+        nRequests++;
+        cb(undefined, genMsg());
     });
 
     proc.on('message', (msg) => {
-        // TODO do nothing for now
+        console.log('Received message in slave ...');
+        nMessages++;
+        proc.sendMsg(genMsg());
     });
 } catch (e) {
     console.error(e, 'Exception in child process!');

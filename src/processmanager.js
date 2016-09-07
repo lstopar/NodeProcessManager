@@ -10,27 +10,16 @@ exports.ProcessManager = class ProcessManager {
 
         this._initProcesses(opts.processes);
     }
-   
-    /*
-     * Sends a message to one or all processes.
+
+    /**
+     * Sends an asynchrounous message to one or all of the slaves.
      *
-     * @param {Object} msg - the message to send
-     * @param {Integer} [processId] - the ID of the process, if missing the message will be sent to all the processes
+     * @param {Object} content - content of the message
+     * @param {Integer} [procN] - the index of the slave
      */
-    sendMsg(msg, procN) {
-        if (procN != null) {
-            if (procN < 0 || procN >= this.processes.length)
-                throw new Error('Invalid process number: ' + procN);
-            
-            console.log('Sending message to slave ' + procN + ' ...');
-            this.processes[procN].send(msg);            
-        }
-        else {
-            console.log('Sending message to all slaves ...');
-            for (var i = 0; i < this.processes.length; i++) {
-                this.sendMsg(msg, i);
-            }
-        }
+    sendMsg(content, procN) {
+        var msg = messages.genMessage(content);
+        this._sendMsg(msg, procN);
     }
 
     sendRequest(content, procN, cb) {
@@ -42,148 +31,147 @@ exports.ProcessManager = class ProcessManager {
         var self = this;
 
         try {
-            var reqN = this.seqV[procN];
+            var reqId = this._genReqId(procN);
 
-            var req = messages.genRequest(content, reqN);
+            var req = messages.genRequest(content, reqId);
             var handler = function (e, res) {
-                if (e != null)
-                    return cb(e);
+                try {
+                    if (e != null)
+                        return cb(e);
 
-                console.log('Received response from process: ' + procN);
+                    console.log('Received response from process: ' + procN);
 
-                self.off('response', procN, handler, reqN);
-                cb(undefined, res);
+                    self._offResponse(procN, reqId, handler);
+                    cb(undefined, res);
+                } catch (e) {
+                    console.error(e, 'Exception while processing response!');
+                }
             }
 
-            this.on('response', procN, handler, reqN);
-            this.sendMsg(req, procN);
+            this._onResponse(procN, reqId, handler);
+            this._sendMsg(req, procN);
         } catch (e) {
             cb(e);
         }
     }
 
-    on(event, procId, handler, reqN) {  // TODO in the future keep requests internal
+    on(event, handler) {
         if (handler == null)
             throw new Error('Handler is null!');
-        if (event != 'response' && event != 'message')
+        if (event != 'message')
             throw new Error('Invalid event name: ' + event);
 
-        if (event == 'message') {
-            this.procHandlerV[procId][event].push(handler);
-        }
-        else {
-            this.procHandlerV[procId][event].push({
-                reqN: reqN,
-                handler: handler,
-                timestamp: new Date().getTime()
-            });
+        for (var procN = 0; procN < this.procMsgHandlerV.length; procN++) {
+            this.procMsgHandlerV[procN][event].push(handler);
         }
     }
 
-    off(event, procId, handler, reqN) {
+    off(event, procId, handler, reqId) {
         if (handler == null)
             throw new Error('Handler is null!');
-        if (event != 'response' && event != 'message')
+        if (event != 'message')
             throw new Error('Invalid event name: ' + event);
 
         console.log('Removing handler ...');
 
-        var handlers = this.procHandlerV[procId][event];
+        var handlers = this.procMsgHandlerV[procId][event];
+        var handlerN = handlers.indexOf(handler);
 
-        if (event == 'message') {
-            var handlerN = handlers.indexOf(handler);
+        if (handlerN < 0)
+            throw new Error('Cannot remove non-registered handler!');
 
-            if (handlerN < 0)
-                throw new Error('Cannot remove non-registered handler!');
+        handlers.splice(handlerN, 1);
+    }
 
-            handlers.splice(handlerN, 1);
+    /*
+     * Sends a message to one or all processes.
+     *
+     * @param {Object} msg - the message to send
+     * @param {Integer} [processId] - the ID of the process, if missing the message will be sent to all the processes
+     */
+    _sendMsg(msg, procN) {
+        if (procN != null) {
+            if (procN < 0 || procN >= this.processes.length)
+                throw new Error('Invalid process number: ' + procN);
+            
+            console.log('Sending message to slave ' + procN + ' ...');
+            this.processes[procN].send(msg);            
         }
         else {
-            // TODO optimize
-            for (var handlerN = 0; handlerN < handlers.length; handlerN++) {
-                var handlerConf = handlers[handlerN];
-                if (handlerConf.reqN == reqN) {
-                    handlers.splice(handlerN, 1);
-                    return;
-                }
+            console.log('Sending message to all slaves ...');
+            for (var i = 0; i < this.processes.length; i++) {
+                this._sendMsg(msg, i);
             }
         }
+    }
+
+    _onResponse(procId, reqId, handler) {
+        var procHandlers = this.procReqHandlerV[procId];
+        procHandlers[reqId] = {
+            handler: handler,
+            timestamp: new Date().getTime()
+        };
+    }
+
+    _offResponse(procId, reqId, handler) {
+        var procHandlers = this.procReqHandlerV[procId];
+        delete procHandlers[reqId];
     }
 
     _initProcesses(processes) {
         this.processes = [];
         this.seqV = [];
-        this.procHandlerV = [];
+        this.procMsgHandlerV = [];
+        this.procReqHandlerV = [];
 
         var self = this;
         for (var i = 0; i < processes.length; i++) {
             (function () {
                 var child = processes[i];
-                var childId = child.pid;
-                var childN = i;
+                var childPid = child.pid;
+                var childId = i;
 
-                /*
-                child.stdout.on('data', (data) => {
-                    console.log('Received chink from process ${processId}: ${data}');
-                    // TODO
-                });
-
-                child.stderr.on('data', (data) => {
-                    console.error(data, 'Exception in slave: ${processId}');
-                    // TODO
-                });
-                */
                 child.on('error', (e) => {
-                    console.error(e, 'Failed to start process:' + childId);
+                    console.error(e, 'Failed to start process:' + childPid);
                     // TODO
                 });
 
                 child.on('close', (code) => {
-                    console.log('Slave ' + childId + ' exited with code:' + code);
+                    console.log('Slave ' + childPid + ' exited with code:' + code);
                     // TODO
                 });
 
                 child.on('message', (msg) => {
                     try {
-                        console.log('Received message from child ' + childId + ': ' + JSON.stringify(msg) + '...');
+                        console.log('Received message from child ' + childPid + ': ' + JSON.stringify(msg) + '...');
 
                         var type = msg.type;
 
                         switch(type) {
                             case 'message': {
-                                var handlers = self.procHandlerV[childN].message;
+                                var handlers = self.procMsgHandlerV[childId].message;
                                 for (var handlerN = 0; handlerN < handlers.length; handlerN++) {
                                     var handler = handlers[handlerN];
-                                    handler(msg);
+                                    handler(childId, msg);
                                 }
                                 break;
                             }
                             case 'response': {
-                                var handlers = self.procHandlerV[childN].response;
+                                var reqId = msg.reqId;
+                                var handlerH = self.procReqHandlerV[childId];
                                 
-                                var delHandlerN = null;
-                                for (var handlerN = 0; handlerN < handlers.length; handlerN++) {
-                                    var config = handlers[handlerN];
-
-                                    var reqN = msg.reqN;
+                                if (reqId in handlerH) {
+                                    var handler = handlerH[reqId].handler;
                                     var status = msg.status;
 
-                                    if (config.reqN != msg.reqN) continue;
-
                                     if (status == 'error')
-                                        config.handler(new Error(msg.content));
+                                        handler(new Error(msg.content));
                                     else
-                                        config.handler(undefined, msg.content);
-
-                                    delHandlerN = handlerN;
-                                    break;
+                                        handler(undefined, msg.content);
+                                    
+                                    // the request has been processed, so remove the handler
+                                    delete handlerH[reqId];
                                 }
-
-                                if (delHandlerN != null) {
-                                    console.log('Response received, removing handler ...');
-                                    handlers.splice(delHandlerN, 1);
-                                }
-
                                 break;
                             }
                             default: {
@@ -200,32 +188,34 @@ exports.ProcessManager = class ProcessManager {
 
             this.processes.push(processes[i]);
             this.seqV.push(0);
-            this.procHandlerV.push({
-                message: [],
-                response: []
+            this.procMsgHandlerV.push({
+                message: []
             });
+            this.procReqHandlerV.push({});
         }
     }
 
     _cleanupRespHandlers() {
         var timestamp = new Date().getTime();
         
-        console.log('Cleaning up handlers ...');
+        console.log('Cleaning up request handlers ...');
 
-        for (var procN = 0; procN < this.procHandlerV.length; procN++) {
-            var handlers = this.procHandlerV[procN].response;
+        for (var procId = 0; procId < this.procReqHandlerV.length; procId++) {
+            var procHandlers = this.procReqHandlerV[procId];
+            for (var reqId in procHandlers) {
+                var handlerConf = procHandlers[reqId];
+                if (timestamp - handlerConf.timestamp > REQUEST_TIMEOUT) {
+                    console.log('Removing handler ' + handlerN + ' of process: ' + procId);
 
-            for (var handlerN = handlers.length-1; handlerN >= 0; handlerN--) {
-                var reqTimestamp = handlers[handlerN].timestamp;
-
-                if (timestamp - reqTimestamp > REQUEST_TIMEOUT) {
-                    handlers[handlerN].handler(new Error('Request timedout!'));
-
-                    console.log('Removing handler ' + handlerN + ' of process ' + procN);
-                    handlers.splice(handlerN, 1);
+                    handlerConf.handler(new Error('Request timeout!'));
+                    delete procHandlers[reqId];
                 }
             }
         }
+    }
+
+    _genReqId(procId) {
+        return this.seqV[procId]++;
     }
 }
 
@@ -242,10 +232,31 @@ exports.ChildProcess = class ChildProcess {
         });
     }
 
+    /*
+     * Sends a message to the master.
+     *
+     * @param {Object} msg - the message
+     */
+    sendMsg(msg) {
+       this._sendMsg(messages.genMessage(msg));
+    }
+
+    /*
+     * Registers a new event handler.
+     *
+     * @param {String} event - name of the event, either 'message' or 'request'
+     * @param {Function} handler - the event handler. When registering a message handler the function takes one argument: the message,
+     * while when registering a request handler the function takes two arguments: the request and the callback
+     */
     on(event, handler) {
         if (event != 'request' && event != 'message')
             throw new Error('Unknown event: ' + event);
         this.handlers[event] = handler;
+    }
+
+    _sendMsg(msg) {
+        console.log('Sending message: ' + JSON.stringify(msg));
+        process.send(msg);
     }
 
     _onMessage(msg) {
@@ -263,19 +274,19 @@ exports.ChildProcess = class ChildProcess {
                     var handler = this.handlers.request;
 
                     try {
+                        var self = this;
                         handler(msg.content, (e, res) => {
                             if (e != null) {
                                 console.error(e, 'Exception in child process!');
-                                process.send(messages.genErrorResponse(msg, e.message));
+                                self._sendMsg(messages.genErrorResponse(msg, e.message));
                                 return;
                             }
 
-                            var responseMsg = messages.genResponse(msg, res);
-                            process.send(responseMsg);
+                            self._sendMsg(messages.genResponse(msg, res));
                         });
                     } catch (e) {
                         console.error(e, 'Exception while processing request!');
-                        process.send(messages.genErrorResponse(msg, e.message));
+                        self._sendMsg(messages.genErrorResponse(msg, e.message));
                     }
                     break;
                 }

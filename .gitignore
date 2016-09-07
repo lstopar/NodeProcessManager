@@ -1,5 +1,6 @@
 # Node.js files
 /node_modules
 
-# VI temporary files
+# VI files
 *.swp
+.tern_project

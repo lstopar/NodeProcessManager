@@ -7,13 +7,20 @@ module.exports = {
         return { type: 'pong' };
     },
 
-    genRequest: function (content, reqN) {
-        if (reqN == null)
+    genMessage: function (content) {
+        return {
+            type: 'message',
+            content: content
+        };
+    },
+
+    genRequest: function (content, reqId) {
+        if (reqId == null)
             throw new Error('Sequential number missing in genRequest!');
 
         return {
             type: 'request',
-            reqN: reqN,
+            reqId: reqId,
             content: content
         };
     },
@@ -24,7 +31,7 @@ module.exports = {
         
         return {
             type: 'response',
-            reqN: req.reqN,
+            reqId: req.reqId,
             status: 'ok',
             content: content
         };
@@ -33,7 +40,7 @@ module.exports = {
     genErrorResponse: function (req, explain) {
         return {
             type: 'response',
-            reqN: req.reqN,
+            reqId: req.reqId,
             status: 'error',
             content: explain
         }
