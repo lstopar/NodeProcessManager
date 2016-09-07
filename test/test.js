@@ -70,7 +70,7 @@ function initServer() {
             var slaveN = req.query.n;
 
             pm.sendMsg({}, slaveN);
-            res.status(204) ;
+            res.send({ success: true });
             res.end();
         } catch (e) {
             console.error(e, 'Exception while processing touch request!');
@@ -94,18 +94,29 @@ try {
     console.log('Initializing ...');
 
     // initialize the processes
-    var processes = [];
-    for (var i = 0; i < config.processes; i++) {
-        console.log('Starting process ' + i + ' ...');
+    var slaveIds = ['a', 'b', 'c', 'd'];
+    var slaves = [];
+    for (var i = 0; i < slaveIds.length; i++) {
+        console.log('Starting process \'' + slaveIds[i] + '\' ...');
         var slave = fork(__dirname + '/slave.js', []);
-        processes.push(slave);
-    }    
+        slaves.push(slave);
+    } 
 
-    pm = new processmanager.master({ processes: processes });
+    pm = new processmanager.master();
     server = initServer();
 
-    pm.on('message', (childId, msg) => {
-        console.log('Received a message from slave ' + childId + ': ' + JSON.stringify(msg));
+    pm.register(slaves, slaveIds);
+
+    pm.on('close', (slaveId) => {
+        console.log('Child \'' + slaveId + '\' exited!');
+    });
+
+    pm.on('error', (slaveId, e) => {
+        console.error(e, 'Error with slave: ' + slaveId);
+    })
+
+    pm.on('message', (slaveId, msg) => {
+        console.log('Received a message from slave ' + slaveId + ': ' + JSON.stringify(msg));
     });
 
     console.log('Initialized!');

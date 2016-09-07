@@ -95,10 +95,37 @@ class SlaveProcess {
 class MasterProcess {
     
     constructor(opts) {
-        if (opts.processes == null)
-            throw new Error('Processes not defined!');
+        this.slaveH = {};
+        this.messageCb = function () {}
+        this.currReqIdH = {};
+        this.procReqCbH = {};
+        this.closeCb = function () {}
+        this.errorCb = function () {}
+    }
 
-        this._initProcesses(opts.processes);
+    /**
+     * Registers a new child process or a new array of child processes and returns their IDs.
+     * 
+     * @param {child_process.ChildProcess|Array<child_process.ChildProcess>} slave(s) - one or more slave processes
+     * @param {} [slaveId(s)] - ID (or array of IDs) of the slave
+     * @returns slaveId(s)
+     */
+    register(slave, slaveId) {
+        if (Array.isArray(slave)) {
+            var slaves = slave;
+            var slaveIds = slaveId;
+
+            var ids = [];
+            for (var slaveN = 0; slaveN < slaves.length; slaveN++) {
+                var id = this.register(slaves[slaveN], slaveIds != null ? slaveIds[slaveN] : undefined);
+                ids.push(id);
+            }
+
+            return ids;
+        }
+        else {
+            return this._initSlave(slave, slaveId);
+        }
     }
 
     /**
@@ -107,21 +134,21 @@ class MasterProcess {
      * @param {Object} content - content of the message
      * @param {Integer} [procN] - the index of the slave
      */
-    sendMsg(content, procN) {
+    sendMsg(content, slaveId) {
         var msg = messages.genMessage(content);
-        this._sendMsg(msg, procN);
+        this._sendMsg(msg, slaveId);
     }
 
-    sendRequest(content, procN, cb) {
-        if (procN == null)
+    sendRequest(content, slaveId, cb) {
+        if (slaveId == null)
             return cb(new Error('Process identifier missing when sending request!'));
-        if (procN < 0 || procN >= this.processes.length)
-            return cb(new Error('Invalid process identifier: ' + procN));
+        if (!(slaveId in this.slaveH))
+            return cb(new Error('Invalid process identifier: ' + slaveId));
 
         var self = this;
 
         try {
-            var reqId = this._genReqId(procN);
+            var reqId = this._genReqId(slaveId);
 
             var req = messages.genRequest(content, reqId);
             var handler = function (e, res) {
@@ -129,17 +156,17 @@ class MasterProcess {
                     if (e != null)
                         return cb(e);
 
-                    console.log('Received response from process: ' + procN);
+                    console.log('Received response from process: ' + slaveId);
 
-                    self._offResponse(procN, reqId, handler);
+                    self._offResponse(slaveId, reqId, handler);
                     cb(undefined, res);
                 } catch (e) {
                     console.error(e, 'Exception while processing response!');
                 }
             }
 
-            this._onResponse(procN, reqId, handler);
-            this._sendMsg(req, procN);
+            this._onResponse(slaveId, reqId, handler);
+            this._sendMsg(req, slaveId);
         } catch (e) {
             cb(e);
         }
@@ -148,29 +175,39 @@ class MasterProcess {
     on(event, handler) {
         if (handler == null)
             throw new Error('Handler is null!');
-        if (event != 'message')
-            throw new Error('Invalid event name: ' + event);
 
-        for (var procN = 0; procN < this.procMsgHandlerV.length; procN++) {
-            this.procMsgHandlerV[procN][event].push(handler);
+        if (event == 'message') {
+            this.messageCb = handler;
+        }
+        else if (event == 'close') {
+            this.closeCb = handler;
+        }
+        else if (event == 'error') {
+            this.errorCb = handler;
+        }
+        else {
+            throw new Error('Invalid event name: ' + event);
         }
     }
 
-    off(event, procId, handler, reqId) {
+    off(event, handler) {
         if (handler == null)
             throw new Error('Handler is null!');
-        if (event != 'message')
-            throw new Error('Invalid event name: ' + event);
 
         console.log('Removing handler ...');
 
-        var handlers = this.procMsgHandlerV[procId][event];
-        var handlerN = handlers.indexOf(handler);
-
-        if (handlerN < 0)
-            throw new Error('Cannot remove non-registered handler!');
-
-        handlers.splice(handlerN, 1);
+        if (event == 'message') {
+            this.messageCb = function () {}
+        }
+        else if (event == 'close') {
+            this.closeCb = function () {}
+        }
+        else if (event == 'error') {
+            this.errorCb = function () {}
+        }
+        else {
+            throw new Error('Invalid event: ' + event);
+        }
     }
 
     /*
@@ -179,110 +216,103 @@ class MasterProcess {
      * @param {Object} msg - the message to send
      * @param {Integer} [processId] - the ID of the process, if missing the message will be sent to all the processes
      */
-    _sendMsg(msg, procN) {
-        if (procN != null) {
-            if (procN < 0 || procN >= this.processes.length)
-                throw new Error('Invalid process number: ' + procN);
+    _sendMsg(msg, slaveId) {
+        if (slaveId != null) {
+            if (!(slaveId in this.slaveH))
+                throw new Error('Invalid process ID: ' + slaveId);
             
-            console.log('Sending message to slave ' + procN + ' ...');
-            this.processes[procN].send(msg);            
+            console.log('Sending message to slave ' + slaveId + ' ...');
+            this.slaveH[slaveId].send(msg);            
         }
         else {
             console.log('Sending message to all slaves ...');
-            for (var i = 0; i < this.processes.length; i++) {
-                this._sendMsg(msg, i);
+            for (var id in this.slaveH) {
+                this._sendMsg(msg, id);
             }
         }
     }
 
-    _onResponse(procId, reqId, handler) {
-        var procHandlers = this.procReqHandlerV[procId];
+    _onResponse(slaveId, reqId, handler) {
+        var procHandlers = this.procReqCbH[slaveId];
         procHandlers[reqId] = {
             handler: handler,
             timestamp: new Date().getTime()
         };
     }
 
-    _offResponse(procId, reqId, handler) {
-        var procHandlers = this.procReqHandlerV[procId];
+    _offResponse(slaveId, reqId, handler) {
+        var procHandlers = this.procReqCbH[slaveId];
         delete procHandlers[reqId];
     }
 
-    _initProcesses(processes) {
-        this.processes = [];
-        this.seqV = [];
-        this.procMsgHandlerV = [];
-        this.procReqHandlerV = [];
+    _initSlave(slave, slaveId) {
+        if (slaveId == null) slaveId = slave.pid;
 
+        this.slaveH[slaveId] = slave;
+        this.currReqIdH[slaveId] = 0;
+        this.procReqCbH[slaveId] = {};
+        
         var self = this;
-        for (var i = 0; i < processes.length; i++) {
-            (function () {
-                var child = processes[i];
-                var childPid = child.pid;
-                var childId = i;
 
-                child.on('error', (e) => {
-                    console.error(e, 'Failed to start process:' + childPid);
-                    // TODO
-                });
+        slave.on('error', (e) => {
+            self._cleanup(slaveId);
+            self.errorCb(slaveId, e);
+        });
 
-                child.on('close', (code) => {
-                    console.log('Slave ' + childPid + ' exited with code:' + code);
-                    // TODO
-                });
+        slave.on('close', (code) => {
+            self._cleanup(slaveId);
+            self.closeCb(slaveId);
+        });
 
-                child.on('message', (msg) => {
-                    try {
-                        console.log('Received message from child ' + childPid + ': ' + JSON.stringify(msg) + '...');
+        slave.on('message', (msg) => {
+            try {
+                console.log('Received message from slave ' + slaveId + ': ' + JSON.stringify(msg) + '...');
 
-                        var type = msg.type;
+                var type = msg.type;
 
-                        switch(type) {
-                            case 'message': {
-                                var handlers = self.procMsgHandlerV[childId].message;
-                                for (var handlerN = 0; handlerN < handlers.length; handlerN++) {
-                                    var handler = handlers[handlerN];
-                                    handler(childId, msg);
-                                }
-                                break;
-                            }
-                            case 'response': {
-                                var reqId = msg.reqId;
-                                var handlerH = self.procReqHandlerV[childId];
-                                
-                                if (reqId in handlerH) {
-                                    var handler = handlerH[reqId].handler;
-                                    var status = msg.status;
-
-                                    if (status == 'error')
-                                        handler(new Error(msg.content));
-                                    else
-                                        handler(undefined, msg.content);
-                                    
-                                    // the request has been processed, so remove the handler
-                                    delete handlerH[reqId];
-                                }
-                                break;
-                            }
-                            default: {
-                                throw new Error('Unknown message type: ' + type);
-                            }
-                        }
-
-                        self._cleanupRespHandlers();
-                    } catch (e) {
-                        console.log(e, 'Exception while processing child message!');
+                switch(type) {
+                    case 'message': {
+                        self.messageCb(slaveId, msg.content);
+                        break;
                     }
-                });
-            })();
+                    case 'response': {
+                        var reqId = msg.reqId;
+                        var handlerH = self.procReqCbH[slaveId];
+                        
+                        if (reqId in handlerH) {
+                            var handler = handlerH[reqId].handler;
+                            var status = msg.status;
 
-            this.processes.push(processes[i]);
-            this.seqV.push(0);
-            this.procMsgHandlerV.push({
-                message: []
-            });
-            this.procReqHandlerV.push({});
-        }
+                            if (status == 'error')
+                                handler(new Error(msg.content));
+                            else
+                                handler(undefined, msg.content);
+                            
+                            // the request has been processed, so remove the handler
+                            delete handlerH[reqId];
+                        }
+                        break;
+                    }
+                    default: {
+                        throw new Error('Unknown message type: ' + type);
+                    }
+                }
+
+                self._cleanupRespHandlers();
+            } catch (e) {
+                console.log(e, 'Exception while processing slave message!');
+            }
+        });
+
+        return slaveId;
+    }
+
+    _cleanup(slaveId) {
+        var slave = this.slaveH[slaveId];
+
+        delete this.slaveH[slaveId];
+        delete this.currReqIdH[slaveId];
+        delete this.procReqCbH[slaveId];
     }
 
     _cleanupRespHandlers() {
@@ -290,8 +320,8 @@ class MasterProcess {
         
         console.log('Cleaning up request handlers ...');
 
-        for (var procId = 0; procId < this.procReqHandlerV.length; procId++) {
-            var procHandlers = this.procReqHandlerV[procId];
+        for (var slaveId in this.procReqCbH) {
+            var procHandlers = this.procReqCbH[slaveId];
             for (var reqId in procHandlers) {
                 var handlerConf = procHandlers[reqId];
                 if (timestamp - handlerConf.timestamp > REQUEST_TIMEOUT) {
@@ -304,8 +334,8 @@ class MasterProcess {
         }
     }
 
-    _genReqId(procId) {
-        return this.seqV[procId]++;
+    _genReqId(slaveId) {
+        return this.currReqIdH[slaveId]++;
     }
 }
 
