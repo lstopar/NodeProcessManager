@@ -36,7 +36,7 @@ function handleServerError(e, req, res) {
     console.error(e, 'Exception while processing request!');
     res.status(500);    // internal server error
     res.send(e.message);
-    res.end();
+   res.end();
 }
 
 function initServer() {
@@ -54,7 +54,7 @@ function initServer() {
             pm.sendRequest({}, slaveN, (e, childRes) => {
                 if (e != null)
                     return handleServerError(e, req, res);
-                
+               
                 console.log('Sending response: ' + JSON.stringify(childRes));
 
                 res.send(childRes);
@@ -69,8 +69,8 @@ function initServer() {
         try {
             var slaveN = req.query.n;
 
-            pm.sendMsg({}, slaveN);
-            res.send({ success: true });
+            pm.send(slaveN, {});
+            res.send({ success: true }, slaveN);
             res.end();
         } catch (e) {
             console.error(e, 'Exception while processing touch request!');
@@ -92,7 +92,7 @@ function initServer() {
 
 try {
     console.log('Initializing ...');
-
+    
     // initialize the processes
     var slaveIds = ['a', 'b', 'c', 'd'];
     var slaves = [];
