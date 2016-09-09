@@ -51,10 +51,10 @@ function initServer() {
             if (slaveN == null)
                 return handleBadInput(res, 'Need process number!');
             
-            pm.sendRequest({}, slaveN, (e, childRes) => {
+            pm.request({}, slaveN, (e, childRes) => {
                 if (e != null)
                     return handleServerError(e, req, res);
-               
+
                 console.log('Sending response: ' + JSON.stringify(childRes));
 
                 res.send(childRes);
@@ -69,8 +69,8 @@ function initServer() {
         try {
             var slaveN = req.query.n;
 
-            pm.send(slaveN, {});
-            res.send({ success: true }, slaveN);
+            pm.send({}, slaveN);
+            res.send({ success: true });
             res.end();
         } catch (e) {
             console.error(e, 'Exception while processing touch request!');
@@ -124,4 +124,3 @@ try {
     console.error(e, 'Exception while initializing!');
     process.exit(2);
 }
-

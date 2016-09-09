@@ -151,11 +151,11 @@ class MasterProcess {
     /*
      * Sends a request to the slave process identified by 'slaveId'.
      *
-     * @param {String|Number} slaveId - user defined identifier of the slave process.
      * @param {Object} content - the content to send
+     * @param {String|Number} slaveId - user defined identifier of the slave process.
      * @param {Function} callback - the callback function in the form of 'function (error, response) {}'
      */
-    sendRequest(content, slaveId, cb) {
+    request(content, slaveId, cb) {
         if (slaveId == null)
             return cb(new Error('Process identifier missing when sending request!'));
         if (!(slaveId in this.slaveH))
@@ -196,10 +196,10 @@ class MasterProcess {
     /*
      * Send the specified signal to the slave identified by 'slaveId'.
      *
-     * @param {Object} slaveId - identifier of the slave process
      * @param {String} [signal] - the signal to send to the process, for example: 'SIGINT'
+     * @param {Object} slaveId - identifier of the slave process
      */
-    sendSignal(signal, slaveId) {
+    signal(signal, slaveId) {
         if (!(slaveId in this.slaveH))
             throw new Error(`Invalid process identifier: ${slaveId}`);
 
